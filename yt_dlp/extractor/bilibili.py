@@ -236,6 +236,7 @@ class BilibiliBaseIE(InfoExtractor):
             'dm_img_inter': json.dumps({'ds': [], 'wh': get_wh(*self.__screen_dimensions()), 'of': get_of(random.randint(0, 100), 0)}, separators=(',', ':')),
         }
 
+    # Source https://security.bilibili.com/static/js/412.js
     def bili_challenge_result(self, data, limit=10_000_000):
         final_hash = data.get('r')
         q = data.get('q')
@@ -813,6 +814,8 @@ class BiliBiliIE(BilibiliBaseIE):
         if not self._match_valid_url(urlh.url):
             return self.url_result(urlh.url)
 
+        headers['Referer'] = 'https://www.bilibili.com/'
+
         initial_state = self._search_json(r'window\.__INITIAL_STATE__\s*=', webpage, 'initial state', video_id, default=None)
         if not initial_state:
             if self._search_json(r'\bwindow\._riskdata_\s*=', webpage, 'risk', video_id, default={}).get('v_voucher'):
@@ -831,7 +834,7 @@ class BiliBiliIE(BilibiliBaseIE):
             if new_url and BiliBiliBangumiIE.suitable(new_url):
                 return self.url_result(new_url, BiliBiliBangumiIE)
 
-        error_code = traverse_obj(initial_state, ((('error', 'trueCode'), ('code')), {int_or_none}, any))
+        error_code = traverse_obj(initial_state, ((('error', 'trueCode'), ('code')), any, {int_or_none}))
         if error_code == -403:
             self.raise_login_required()
         if error_code == -404:
@@ -847,27 +850,23 @@ class BiliBiliIE(BilibiliBaseIE):
         video_id, title = video_data['bvid'], video_data.get('title')
 
         # Bilibili anthologies are similar to playlists but all videos share the same video ID as the anthology itself.
-        page_list_json = traverse_obj(initial_state,
-                                      ('availableVideoList', lambda _, y: y.get('bvid') == video_id, 'list', {list}, any),
-                                      ('videoData', 'pages'),
-                                      ('pages'), default=None)
-        if page_list_json is None:
-            page_list_json = (not is_festival and traverse_obj(
-                self._download_json(
-                    'https://api.bilibili.com/x/player/pagelist', video_id,
-                    fatal=False, query={'bvid': video_id, 'jsonp': 'jsonp'},
-                    note='Extracting videos in anthology', headers=headers), 'data', expected_type=list)) or []
+        page_list_json = (not is_festival and traverse_obj(
+            self._download_json(
+                'https://api.bilibili.com/x/player/pagelist', video_id,
+                fatal=False, query={'bvid': video_id, 'jsonp': 'jsonp'},
+                note='Extracting videos in anthology', headers=headers),
+            'data', expected_type=list)) or []
         is_anthology = len(page_list_json) > 1
 
         part_id = int_or_none(parse_qs(url).get('p', [None])[-1])
         if is_anthology and not part_id and self._yes_playlist(video_id, video_id):
             return self.playlist_from_matches(
                 page_list_json, video_id, title, ie=BiliBiliIE,
-                getter=lambda entry: f'https://www.bilibili.com/video/{video_id}?p={traverse_obj(entry, ("page"), ("p"))}')
+                getter=lambda entry: f'https://www.bilibili.com/video/{video_id}?p={entry["page"]}')
 
         part_idx = part_id or 1
         if is_anthology:
-            title += f' p{part_idx:02d} {traverse_obj(page_list_json, (part_idx, ("part", "title"), any)) or ""}'
+            title += f' p{part_idx:02d} {traverse_obj(page_list_json, (part_idx - 1, "part")) or ""}'
 
         aid = video_data.get('aid')
         old_video_id = format_field(aid, None, f'%s_part{part_idx}')
